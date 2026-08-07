@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Octokit } from '@octokit/rest';
+import { compressImage } from '@/utils/compressImage';
 
-export const runtime = "edge";
+// Run in Node.js runtime to support image compression using sharp
+export const runtime = "nodejs";
 
 
 export async function POST(request: NextRequest) {
@@ -57,13 +59,34 @@ export async function POST(request: NextRequest) {
             auth: githubToken,
         });
 
-        // Convert file to base64
-        const bytes = await file.arrayBuffer();
-        const buffer = Buffer.from(bytes);
-        const base64Content = buffer.toString('base64');
+        // Parse quality and max_dim if provided
+        const qualityStr = formData.get('quality') as string | null;
+        const maxDimStr = formData.get('max_dim') as string | null;
+        const quality = qualityStr ? parseInt(qualityStr, 10) : 82;
+        const maxDim = maxDimStr ? parseInt(maxDimStr, 10) : 2048;
+
+        // Convert file to buffer and optionally compress
+        let fileBuffer: Buffer = Buffer.from(await file.arrayBuffer());
+        let finalFilename = file.name;
+        let finalMimeType = file.type;
+        let finalSize = file.size;
+
+        if (file.type.startsWith('image/')) {
+            try {
+                const result = await compressImage(fileBuffer, file.name, quality, maxDim);
+                fileBuffer = result.buffer;
+                finalFilename = result.filename;
+                finalMimeType = result.mimeType;
+                finalSize = result.size;
+            } catch (err) {
+                console.error('Image compression failed, using original file:', err);
+            }
+        }
+
+        const base64Content = fileBuffer.toString('base64');
 
         // Generate unique filename
-        const extension = file.name.split('.').pop() || 'jpg';
+        const extension = finalFilename.split('.').pop() || 'jpg';
         const cleanFolder = folder.replace(/^\/+|\/+$/g, ''); // Remove leading/trailing slashes
         const destinationFolder = `src/assets/${cleanFolder}`;
         let filename: string;
@@ -83,7 +106,7 @@ export async function POST(request: NextRequest) {
             owner: githubOwner,
             repo: githubRepo,
             path: filename,
-            message: `Upload image: ${file.name}`,
+            message: `Upload image: ${finalFilename}`,
             content: base64Content,
             branch: githubBranch,
         });
@@ -108,8 +131,8 @@ export async function POST(request: NextRequest) {
             message: 'Image uploaded successfully',
             data: {
                 filename: filename,
-                size: file.size,
-                type: file.type,
+                size: finalSize,
+                type: finalMimeType,
                 commit_sha: commitSha,
                 github_url: response.data.content?.html_url,
                 urls: urls,
@@ -192,6 +215,18 @@ export async function GET() {
                 required: false,
                 default: 'uploads',
                 description: 'Folder path within the repository'
+            },
+            quality: {
+                type: 'number',
+                required: false,
+                default: 82,
+                description: 'Image compression quality (1-100)'
+            },
+            max_dim: {
+                type: 'number',
+                required: false,
+                default: 2048,
+                description: 'Maximum width/height dimension for image resizing'
             }
         },
         response: {
