@@ -3,6 +3,7 @@ import { Octokit } from '@octokit/rest';
 import { compressImage } from '@/utils/compressImage';
 
 // Run in Node.js runtime to support image compression using sharp
+export const runtime = 'edge';
 export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
